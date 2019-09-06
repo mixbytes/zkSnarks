@@ -1,6 +1,25 @@
-const Verifier = artifacts.require("Verifier");
-
 const truffleAssert = require('truffle-assertions');
+
+const zkSnark = require("snarkjs");
+const {stringifyBigInts, unstringifyBigInts} = require("../node_modules/snarkjs/src/stringifybigint.js");
+const fs = require("fs")
+
+const witnessName = "witness.json"
+const provingKeyName = "proving_key.json"
+const proofName = "a-proof.json"
+const publicName = "public.json"
+const inputName = "input.json"
+const circuitName = "circuit.json"
+
+function p256(n) {
+    let nstr = n.toString(16);
+    while (nstr.length < 64) nstr = "0"+nstr;
+    nstr = `0x${nstr}`;
+    return nstr;
+}
+
+
+const Verifier = artifacts.require("Verifier");
 
 contract('Verifier', function(accounts) {
 	const acc = {anyone: accounts[0], owner: accounts[1], anyoneElse: accounts[2]};
@@ -9,20 +28,35 @@ contract('Verifier', function(accounts) {
 	});
 
 	it('verifyTx with valid proof', async function() {
-		let a = ["0x1c36dcffa432f1f0ae4ea4659dc182b4c0bde8078bcd9622fd7531278fcd7c3e", "0x24cf0aea3db1930a93da877bdb317912efd01f0c3fbd4f7e67b9d0726bf55238"];
-		let b = [["0x0315d032f690c0b2065787c5597f86da603c825cfcb7f61d151b38df88f86bda", "0x0dfc4543aacca09ecc3f657924d7a291dd2c21dc5ca96feeb417e9a656ff9013"], ["0x01e42366a274eccee1058fee3ef05523da09d126ad4fda0659b655dcf9888b1c", "0x2f512d6088e9deffd04ed23e9f094e25feeadb41ad87e3998ce894c8cf2b04b8"]];
-		let c = ["0x070f52468b17a27495d2a72a9e70fd8e0856588bafc113b230087672ab51ff89", "0x2e359e14b32f50fba4d69611777846bd3ac10206d94a414c2cff7be9c298ab8c"];
-		let i = ["0x0000000000000000000000000000000000000000000000000000000000000079", "0x0000000000000000000000000000000000000000000000000000000000000001"];
-		const trans = await this.inst.verifyTx(a, b, c, i, { from: acc.anyone })
-		truffleAssert.eventEmitted(trans, 'Verified');
-	});
+		const cirDef = JSON.parse(fs.readFileSync(circuitName, "utf8"));
+		const cir = new zkSnark.Circuit(cirDef);
+		const input = {
+			"a": "524287",
+			"b": "6700417"
+		}
+		const witness = cir.calculateWitness(input);
+		console.log(witness)
+		const provingKey = unstringifyBigInts(JSON.parse(fs.readFileSync(provingKeyName, "utf8")));
+		const {proof, publicSignals} = zkSnark.original.genProof(provingKey, witness)
+        
+        let inputs = "";
+        for (let i=0; i<publicSignals.length; i++) {
+            if (inputs != "") inputs = inputs + ",";
+            inputs = inputs + p256(publicSignals[i]);
+        }
 
-	it('verifyTx with invalid proof', async function() {
-		let a = ["0x1c36dcffa432f1f0ae4ea4659dc182b4c0bde8078bcd9622fd7531278fcd7c3e", "0x24cf0aea3db1930a93da877bdb317912efd01f0c3fbd4f7e67b9d0726bf55238"];
-		let b = [["0x0315d032f690c0b2065787c5597f86da603c825cfcb7f61d151b38df88f86bda", "0x0dfc4543aacca09ecc3f657924d7a291dd2c21dc5ca96feeb417e9a656ff9013"], ["0x01e42366a274eccee1058fee3ef05523da09d126ad4fda0659b655dcf9888b1c", "0x2f512d6088e9deffd04ed23e9f094e25feeadb41ad87e3998ce894c8cf2b04b8"]];
-		let c = ["0x070f52468b17a27495d2a72a9e70fd8e0856588bafc113b230087672ab51ff89", "0x2e359e14b32f50fba4d69611777846bd3ac10206d94a414c2cff7be9c298ab8c"];
-		let i = ["0x100000000000000000000000000000000000000000000000000000000000079", "0x0000000000000000000000000000000000000000000000000000000000000001"];
-		const trans = await this.inst.verifyTx(a, b, c, i, { from: acc.anyone })
-		truffleAssert.eventNotEmitted(trans, 'Verified');
+		trans = await this.inst.verifyProof(
+			[p256(proof.pi_a[0]), p256(proof.pi_a[1])],
+			[p256(proof.pi_ap[0]), p256(proof.pi_ap[1])],
+			[[p256(proof.pi_b[0][1]), p256(proof.pi_b[0][0])],[p256(proof.pi_b[1][1]), p256(proof.pi_b[1][0])]],
+			[p256(proof.pi_bp[0]), p256(proof.pi_bp[1])],
+			[p256(proof.pi_c[0]), p256(proof.pi_c[1])],
+			[p256(proof.pi_cp[0]), p256(proof.pi_cp[1])],
+			[p256(proof.pi_h[0]), p256(proof.pi_h[1])],
+			[p256(proof.pi_kp[0]), p256(proof.pi_kp[1])],
+			[inputs],
+			{ from: acc.anyone }
+		)
+		assert.equal(trans, true)
 	});
 })
